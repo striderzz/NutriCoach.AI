@@ -77,7 +77,8 @@ nav.tabs { display: flex; gap: 6px; }
 @media (max-width: 760px) {
   header.top { backdrop-filter: none; background: var(--bg); }   /* a filter would trap the fixed tab bar */
   header.top .wrap + .wrap { padding: 0 !important; min-height: 0; }
-  #themeSel { max-width: 120px; }
+  .brand { flex-basis: 100%; }
+  header.top select, #openSettings { flex: 1 1 0; min-width: 0 !important; max-width: none !important; }
   nav.tabs {
     position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; justify-content: space-around;
     background: var(--surface); border-top: 1px solid var(--border); padding: 6px 4px calc(6px + env(safe-area-inset-bottom));
@@ -172,5 +173,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .6); backdrop-filter: blur(3px); }
 dialog .in { padding: 20px; overflow: auto; max-height: 90vh; }
 .toast { position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%); background: var(--accent); color: var(--on-accent); padding: 10px 18px; border-radius: 12px; font-weight: 600; z-index: 50; animation: rise .3s; max-width: calc(100% - 32px); }
 pre.cmd { background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; margin: 4px 0; overflow-x: auto; font-size: .82rem; }
+.still *, .still *::after { animation: none !important; transition: none !important; }   /* demo screenshots */
+.still .toast { display: none; }
 @media (prefers-reduced-motion: reduce) { *, *::after { animation: none !important; transition: none !important; } }
 @media print { header.top, nav.tabs, .noprint { display: none !important; } .card { box-shadow: none; break-inside: avoid; } }

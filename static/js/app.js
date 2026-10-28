@@ -359,4 +359,13 @@ $("#saveSettings").onclick = async () => {
   await loadSettings();
   await loadProfiles();
   usePlan();
+  // #page opens a tab; #demo-<page>-<theme> builds a sample plan first (used for README screenshots)
+  const [a, page, theme] = location.hash.slice(1).split("-");
+  if (a === "demo") {
+    document.documentElement.classList.add("still");
+    form.gym.checked = true; form.gym.onchange();
+    if (theme) document.documentElement.dataset.theme = $("#themeSel").value = theme;
+    await form.onsubmit(new Event("submit"));
+    show(page || "results");
+  } else if (a && $("#page-" + a)) show(a);
 })();
