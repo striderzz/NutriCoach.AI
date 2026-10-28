@@ -45,7 +45,6 @@ ReAct Pattern:
   Every agent's reasoning trace is captured and streamed to the UI.
 """
 
-import os
 import json
 import math
 from typing import TypedDict, Annotated, Sequence, Literal, Any
@@ -104,9 +103,9 @@ class NutritionState(TypedDict):
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _make_model(api_key: str) -> ChatOpenAI:
-    os.environ["OPENAI_API_KEY"] = api_key
-    return ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+def _make_model(api_key: str, model: str = "gpt-4o-mini") -> ChatOpenAI:
+    # Key is passed per client, not written to os.environ, so it never leaks between runs
+    return ChatOpenAI(model=model, temperature=0.3, api_key=api_key, max_retries=2, timeout=60)
 
 def _bmi(weight_kg: float, height_cm: float) -> float:
     h = height_cm / 100

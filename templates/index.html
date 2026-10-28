@@ -1,52 +1,99 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
 <meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>NutriCoach ReAct</title>
+<title>NutriCoach.AI</title>
+<link rel="icon" href="{{ url_for('static', filename='icon.png') }}"/>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet"/>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet"/>
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=JetBrains+Mono:wght@400;500&family=Epilogue:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 <style>
+/* Themes: palette per [data-theme]; the accent is shared through --acc-rgb */
 :root{
-  --bg:#04100a;   --s1:#071a0f;  --s2:#0b2416;  --s3:#0f2e1c;
-  --b1:#143d22;   --b2:#1c5230;  --b3:#245f38;
-  --green:#2ecc71;  --green2:#27ae60; --green3:#1a8a45;
-  --green-bg:rgba(46,204,113,.08); --green-glow:rgba(46,204,113,.15);
-  --lime:#a8ff78;   --lime-dim:#4caf50;
   --amber:#f39c12;  --amber-bg:rgba(243,156,18,.08);
   --red:#e74c3c;    --red-bg:rgba(231,76,60,.08);
   --blue:#3498db;   --blue-bg:rgba(52,152,219,.08);
   --violet:#9b59b6; --violet-bg:rgba(155,89,182,.08);
-  --text:#b8e6c8;  --text2:#5a9e72; --text3:#2d6644;
-  --cream:#e8f5e9;
+  --green-bg:rgba(var(--acc-rgb),.08); --green-glow:rgba(var(--acc-rgb),.15);
 }
+:root,:root[data-theme="original"]{
+  --bg:#04100a;   --s1:#071a0f;  --s2:#0b2416;  --s3:#0f2e1c;
+  --b1:#143d22;   --b2:#1c5230;  --b3:#245f38;
+  --green:#2ecc71;  --green2:#27ae60; --green3:#1a8a45; --acc-rgb:46,204,113;
+  --lime:#a8ff78;   --lime-dim:#4caf50;
+  --text:#b8e6c8;  --text2:#5a9e72; --text3:#2d6644; --cream:#e8f5e9;
+  --topbar:rgba(4,16,10,.96); --grid:.025;
+}
+:root[data-theme="dark"]{
+  --bg:#0d1117;   --s1:#11161d;  --s2:#161c25;  --s3:#1b2330;
+  --b1:#232c38;   --b2:#2d3846;  --b3:#3a4757;
+  --green:#22c55e;  --green2:#16a34a; --green3:#15803d; --acc-rgb:34,197,94;
+  --lime:#86efac;   --lime-dim:#4ade80;
+  --text:#c9d1d9;  --text2:#8b949e; --text3:#6b7683; --cream:#f0f6fc;
+  --topbar:rgba(13,17,23,.95); --grid:0;
+}
+:root[data-theme="light"]{
+  --bg:#f4f6f8;   --s1:#ffffff;  --s2:#f6f8fa;  --s3:#eef2f5;
+  --b1:#e2e7ec;   --b2:#cfd7df;  --b3:#b6c0ca;
+  --green:#15803d;  --green2:#16a34a; --green3:#15803d; --acc-rgb:22,163,74;
+  --lime:#22c55e;   --lime-dim:#16a34a;
+  --text:#1f2933;  --text2:#4b5563; --text3:#6b7280; --cream:#0f172a;
+  --topbar:rgba(255,255,255,.96); --grid:0;
+  --amber:#c2710c; --red:#c0392b; --blue:#1d6fb8; --violet:#7e3fa0;
+}
+:root[data-theme="neon"]{
+  --bg:#07040f;   --s1:#0d0820;  --s2:#130c2c;  --s3:#1a1038;
+  --b1:#2a1a55;   --b2:#3b2475;  --b3:#4d2f95;
+  --green:#00f5d4;  --green2:#00bfa6; --green3:#7b2ff7; --acc-rgb:0,245,212;
+  --lime:#f72585;   --lime-dim:#b5179e;
+  --text:#e0d7ff;  --text2:#a594f9; --text3:#7466b8; --cream:#ffffff;
+  --topbar:rgba(7,4,15,.92); --grid:.04;
+  --amber:#ffbe0b; --red:#ff4d6d; --blue:#4cc9f0; --violet:#c77dff;
+}
+/* topbar controls + settings modal */
+.tools{display:flex;align-items:center;gap:8px;}
+.tsel{background:var(--s2);border:1px solid var(--b2);color:var(--text);border-radius:6px;font-size:11px;padding:4px 8px;outline:none;}
+.ibtn{background:var(--s2);border:1px solid var(--b2);color:var(--text2);border-radius:6px;width:30px;height:28px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
+.ibtn:hover{color:var(--green);border-color:var(--green);}
+.keynote{font-size:11px;color:var(--text3);display:flex;align-items:center;gap:6px;cursor:pointer;}
+.keynote .dot{width:7px;height:7px;border-radius:50%;background:var(--red);}
+.keynote.ok .dot{background:var(--green);}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:9000;}
+.modal-bg.show{display:flex;}
+.modal-card{background:var(--s1);border:1px solid var(--b2);border-radius:12px;width:min(440px,92vw);padding:22px 24px;box-shadow:0 20px 60px rgba(0,0,0,.4);}
+.modal-card h3{font-size:16px;font-weight:700;color:var(--cream);margin-bottom:4px;}
+.modal-card p{font-size:11.5px;color:var(--text3);margin-bottom:14px;}
+.mrow{margin-bottom:12px;}
+.mbtns{display:flex;justify-content:flex-end;gap:8px;margin-top:6px;}
+.btn2{background:var(--s2);border:1px solid var(--b2);color:var(--text);border-radius:7px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;}
+.btn2.primary{background:var(--green2);border-color:var(--green2);color:#fff;}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 html,body{height:100%;}
-body{background:var(--bg);color:var(--text);font-family:'Epilogue',sans-serif;font-size:13px;line-height:1.65;}
+body{background:var(--bg);color:var(--text);font-family:'Inter',sans-serif;font-size:13.5px;line-height:1.65;-webkit-font-smoothing:antialiased;}
 
 /* subtle grid */
 body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
-  background-image:linear-gradient(rgba(46,204,113,.025) 1px,transparent 1px),
-    linear-gradient(90deg,rgba(46,204,113,.025) 1px,transparent 1px);
+  background-image:linear-gradient(rgba(var(--acc-rgb),var(--grid)) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(var(--acc-rgb),var(--grid)) 1px,transparent 1px);
   background-size:50px 50px;}
 
 /* ── full-height grid ── */
 .app{display:grid;grid-template-columns:270px 1fr;grid-template-rows:50px 1fr;height:100vh;overflow:hidden;position:relative;z-index:1;}
 
 /* ── topbar ── */
-.topbar{grid-column:1/-1;background:rgba(4,16,10,.96);border-bottom:1px solid var(--b1);
+.topbar{grid-column:1/-1;background:var(--topbar);backdrop-filter:blur(8px);border-bottom:1px solid var(--b1);
   display:flex;align-items:center;justify-content:space-between;padding:0 20px;}
-.brand{font-family:'Syne',sans-serif;font-size:15px;font-weight:800;color:var(--cream);
+.brand{font-family:'Inter',sans-serif;font-size:15px;font-weight:800;color:var(--cream);
   display:flex;align-items:center;gap:9px;letter-spacing:-.3px;}
 .pulse{width:6px;height:6px;border-radius:50%;background:var(--green);
   animation:pulseAnim 2s ease-in-out infinite;}
-@keyframes pulseAnim{0%,100%{box-shadow:0 0 0 0 rgba(46,204,113,.6),0 0 8px rgba(46,204,113,.3);}
-  50%{box-shadow:0 0 0 8px rgba(46,204,113,0),0 0 16px rgba(46,204,113,.5);}}
+@keyframes pulseAnim{0%,100%{box-shadow:0 0 0 0 rgba(var(--acc-rgb),.6),0 0 8px rgba(var(--acc-rgb),.3);}
+  50%{box-shadow:0 0 0 8px rgba(var(--acc-rgb),0),0 0 16px rgba(var(--acc-rgb),.5);}}
 .vtag{font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text3);}
 .chips{display:flex;gap:5px;}
 .chip{font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;
   padding:3px 8px;border-radius:3px;border:1px solid;}
-.cg{color:var(--green);border-color:rgba(46,204,113,.35);background:var(--green-bg);}
+.cg{color:var(--green);border-color:rgba(var(--acc-rgb),.35);background:var(--green-bg);}
 .ca{color:var(--amber);border-color:rgba(243,156,18,.35);background:var(--amber-bg);}
 .cb{color:var(--blue);border-color:rgba(52,152,219,.35);background:var(--blue-bg);}
 
@@ -62,7 +109,7 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .apirow input::placeholder{color:var(--text3);}
 .fl{font-size:9px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--text3);margin-bottom:4px;display:block;}
 .fi{background:var(--bg);border:1px solid var(--b2);border-radius:6px;color:var(--text);
-  font-family:'Epilogue',sans-serif;font-size:12.5px;padding:7px 10px;width:100%;
+  font-family:'Inter',sans-serif;font-size:12.5px;padding:7px 10px;width:100%;
   transition:border-color .15s;appearance:none;outline:none;}
 .fi:focus{border-color:var(--green);box-shadow:0 0 0 2px var(--green-glow);}
 .fi option{background:var(--s1);}
@@ -76,11 +123,11 @@ body::before{content:'';position:fixed;inset:0;pointer-events:none;z-index:0;
 .sb.ar{border-color:var(--red);background:var(--red-bg);color:var(--red);}
 hr.dv{border:none;border-top:1px solid var(--b1);}
 .run{width:100%;background:linear-gradient(135deg,var(--green2),var(--green3));color:#fff;
-  border:none;border-radius:7px;font-family:'Syne',sans-serif;font-size:13px;font-weight:700;
+  border:none;border-radius:7px;font-family:'Inter',sans-serif;font-size:13px;font-weight:700;
   padding:11px 14px;cursor:pointer;transition:all .15s;
   display:flex;align-items:center;justify-content:center;gap:7px;
-  box-shadow:0 4px 15px rgba(46,204,113,.2);}
-.run:hover{filter:brightness(1.12);box-shadow:0 6px 20px rgba(46,204,113,.3);}
+  box-shadow:0 4px 15px rgba(var(--acc-rgb),.2);}
+.run:hover{filter:brightness(1.12);box-shadow:0 6px 20px rgba(var(--acc-rgb),.3);}
 .run:active{transform:scale(.98);}
 .run:disabled{opacity:.4;cursor:not-allowed;box-shadow:none;}
 .prog-track{height:2px;background:var(--b1);border-radius:99px;overflow:hidden;display:none;}
@@ -107,25 +154,25 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .gnode text{font-family:'JetBrains Mono',monospace;transition:fill .25s;}
 .gnode.idle rect{fill:var(--s2);stroke:var(--b2);}
 .gnode.idle text{fill:var(--text3);}
-.gnode.active rect{fill:var(--green-bg);stroke:var(--green);filter:drop-shadow(0 0 8px rgba(46,204,113,.4));}
+.gnode.active rect{fill:var(--green-bg);stroke:var(--green);filter:drop-shadow(0 0 8px rgba(var(--acc-rgb),.4));}
 .gnode.active text{fill:var(--green);}
-.gnode.done rect{fill:rgba(46,204,113,.05);stroke:rgba(46,204,113,.35);}
-.gnode.done text{fill:rgba(46,204,113,.6);}
+.gnode.done rect{fill:rgba(var(--acc-rgb),.05);stroke:rgba(var(--acc-rgb),.35);}
+.gnode.done text{fill:rgba(var(--acc-rgb),.6);}
 .gnode.crit rect{fill:var(--blue-bg);stroke:var(--blue);}
 .gnode.crit text{fill:var(--blue);}
 .gedge{fill:none;stroke-width:1.5;transition:stroke .25s;}
 .gedge.idle{stroke:var(--b2);}
 .gedge.active{stroke:var(--green);stroke-dasharray:5 3;animation:dash .6s linear infinite;}
-.gedge.done{stroke:rgba(46,204,113,.3);}
+.gedge.done{stroke:rgba(var(--acc-rgb),.3);}
 @keyframes dash{to{stroke-dashoffset:-8;}}
 
 /* ── BMI strip ── */
 .bmi-strip{display:none;border-bottom:1px solid var(--b1);padding:10px 18px;flex-shrink:0;background:var(--s1);}
 .bmi-strip.show{display:flex;align-items:center;gap:20px;flex-wrap:wrap;}
-.bmi-num{font-family:'Syne',sans-serif;font-size:34px;font-weight:800;line-height:1;letter-spacing:-2px;}
+.bmi-num{font-family:'Inter',sans-serif;font-size:34px;font-weight:800;line-height:1;letter-spacing:-2px;}
 .bmi-badge{font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
   padding:3px 9px;border-radius:3px;border:1px solid;margin-top:4px;display:inline-block;}
-.bb-n{color:var(--green);border-color:rgba(46,204,113,.3);background:var(--green-bg);}
+.bb-n{color:var(--green);border-color:rgba(var(--acc-rgb),.3);background:var(--green-bg);}
 .bb-ow,.bb-uw{color:var(--amber);border-color:rgba(243,156,18,.3);background:var(--amber-bg);}
 .bb-ob{color:var(--red);border-color:rgba(231,76,60,.3);background:var(--red-bg);}
 .gauge-wrap{flex:1;min-width:180px;max-width:300px;}
@@ -137,7 +184,7 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .gauge-lbls{display:flex;justify-content:space-between;font-size:9px;color:var(--text3);}
 .mc{background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:7px 11px;}
 .mc-l{font-size:9px;color:var(--text3);font-weight:700;letter-spacing:.07em;text-transform:uppercase;margin-bottom:3px;}
-.mc-v{font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:var(--cream);line-height:1;}
+.mc-v{font-family:'Inter',sans-serif;font-size:17px;font-weight:700;color:var(--cream);line-height:1;}
 .mc-u{font-size:9px;color:var(--text3);margin-top:1px;}
 
 /* ── tabs ── */
@@ -164,17 +211,17 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
   padding-bottom:14px;border-bottom:1px solid var(--b1);margin-bottom:16px;}
 .ph-icon{width:36px;height:36px;border-radius:8px;display:flex;align-items:center;
   justify-content:center;font-size:16px;flex-shrink:0;}
-.phi-g{background:var(--green-bg);color:var(--green);border:1px solid rgba(46,204,113,.2);}
+.phi-g{background:var(--green-bg);color:var(--green);border:1px solid rgba(var(--acc-rgb),.2);}
 .phi-a{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(243,156,18,.2);}
 .phi-b{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(52,152,219,.2);}
 .phi-v{background:var(--violet-bg);color:var(--violet);border:1px solid rgba(155,89,182,.2);}
-.ph-title{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:var(--cream);line-height:1.2;}
+.ph-title{font-family:'Inter',sans-serif;font-size:16px;font-weight:700;color:var(--cream);line-height:1.2;}
 .ph-sub{font-size:11px;color:var(--text3);margin-top:2px;}
 .sbadge{font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
   padding:3px 10px;border-radius:3px;border:1px solid;white-space:nowrap;flex-shrink:0;}
 .sb-w{color:var(--text3);border-color:var(--b2);}
 .sb-r{color:var(--amber);border-color:rgba(243,156,18,.3);background:var(--amber-bg);}
-.sb-ok{color:var(--green);border-color:rgba(46,204,113,.3);background:var(--green-bg);}
+.sb-ok{color:var(--green);border-color:rgba(var(--acc-rgb),.3);background:var(--green-bg);}
 .sb-warn{color:var(--red);border-color:rgba(231,76,60,.3);background:var(--red-bg);}
 
 /* ── ReAct trace ── */
@@ -187,7 +234,7 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .trace-step{display:flex;gap:10px;align-items:flex-start;}
 .ts-icon{width:20px;height:20px;border-radius:4px;display:flex;align-items:center;
   justify-content:center;font-size:10px;flex-shrink:0;margin-top:1px;}
-.ts-thought{background:rgba(46,204,113,.1);color:var(--green);border:1px solid rgba(46,204,113,.2);}
+.ts-thought{background:rgba(var(--acc-rgb),.1);color:var(--green);border:1px solid rgba(var(--acc-rgb),.2);}
 .ts-action{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(243,156,18,.2);}
 .ts-obs{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(52,152,219,.2);}
 .ts-content{flex:1;}
@@ -195,14 +242,14 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .ts-thought .ts-label ~ * , .tl-thought{color:var(--green);}
 .ts-text{font-size:11.5px;color:var(--text2);line-height:1.6;
   background:var(--s2);border:1px solid var(--b1);border-radius:6px;
-  padding:7px 10px;font-family:'Epilogue',sans-serif;white-space:pre-wrap;word-break:break-word;}
+  padding:7px 10px;font-family:'Inter',sans-serif;white-space:pre-wrap;word-break:break-word;}
 .ts-tool-name{font-family:'JetBrains Mono',monospace;font-size:10px;
   color:var(--amber);margin-bottom:3px;font-weight:600;}
 
 /* score row */
 .score-row{display:flex;align-items:center;gap:14px;padding:10px 14px;
   background:var(--s2);border:1px solid var(--b1);border-radius:8px;margin-bottom:14px;}
-.sc-num{font-family:'Syne',sans-serif;font-size:24px;font-weight:800;line-height:1;}
+.sc-num{font-family:'Inter',sans-serif;font-size:24px;font-weight:800;line-height:1;}
 .sc-track{flex:1;height:4px;background:var(--b1);border-radius:99px;overflow:hidden;}
 .sc-fill{height:100%;border-radius:99px;transition:width .5s;}
 .sc-meta{font-size:10px;color:var(--text3);margin-top:3px;}
@@ -215,14 +262,14 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .proto{display:inline-flex;align-items:center;gap:6px;font-size:9px;font-weight:700;
   letter-spacing:.07em;text-transform:uppercase;padding:4px 10px;border-radius:3px;
   border:1px solid;margin-bottom:12px;}
-.ps{color:var(--green);border-color:rgba(46,204,113,.3);background:var(--green-bg);}
+.ps{color:var(--green);border-color:rgba(var(--acc-rgb),.3);background:var(--green-bg);}
 .pi{color:var(--amber);border-color:rgba(243,156,18,.3);background:var(--amber-bg);}
 
 /* sub-tabs for meal panel */
 .sub-tabs{display:flex;gap:6px;margin-bottom:12px;}
 .stab{background:var(--s2);border:1px solid var(--b2);color:var(--text3);border-radius:5px;
   padding:4px 12px;font-size:10px;font-weight:700;cursor:pointer;transition:all .15s;}
-.stab.active-g{background:var(--green-bg);border-color:rgba(46,204,113,.3);color:var(--green);}
+.stab.active-g{background:var(--green-bg);border-color:rgba(var(--acc-rgb),.3);color:var(--green);}
 .stab.active-v{background:var(--violet-bg);border-color:rgba(155,89,182,.3);color:var(--violet);}
 
 /* coach card */
@@ -239,12 +286,12 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 .empty-ico{width:52px;height:52px;border:1px solid var(--b2);border-radius:12px;
   display:flex;align-items:center;justify-content:center;font-size:22px;
   color:var(--text3);background:var(--s1);}
-.empty h4{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:var(--text2);}
+.empty h4{font-family:'Inter',sans-serif;font-size:16px;font-weight:700;color:var(--text2);}
 .empty p{color:var(--text3);max-width:340px;font-size:12px;line-height:1.7;}
 .ep{display:flex;flex-wrap:wrap;gap:6px;justify-content:center;margin-top:6px;}
 .ep span{font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
   padding:3px 9px;border-radius:3px;color:var(--green);
-  background:var(--green-bg);border:1px solid rgba(46,204,113,.2);}
+  background:var(--green-bg);border:1px solid rgba(var(--acc-rgb),.2);}
 
 /* spinner */
 .sp{width:13px;height:13px;border:2px solid var(--b2);border-top-color:var(--green);
@@ -264,7 +311,7 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 <header class="topbar">
   <div class="brand">
     <div class="pulse"></div>
-    NutriCoach <span style="color:var(--green);">ReAct</span>
+    NutriCoach<span style="color:var(--green);">.AI</span>
     <span class="vtag">LangGraph</span>
   </div>
   <div class="chips">
@@ -272,17 +319,18 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
     <span class="chip ca">Critic-Revise Loop</span>
     <span class="chip cb">Tool Use</span>
   </div>
+  <div class="tools">
+    <span class="keynote" id="keynote" onclick="openSettings()"><span class="dot"></span><span id="keytxt">No API key</span></span>
+    <select class="tsel" id="theme-sel" onchange="setTheme(this.value,true)" title="Theme">
+      <option value="original">Original</option><option value="light">Light</option>
+      <option value="dark">Dark</option><option value="neon">Neon</option>
+    </select>
+    <button class="ibtn" onclick="openSettings()" title="Settings"><i class="bi bi-gear-fill"></i></button>
+  </div>
 </header>
 
 <!-- sidebar -->
 <aside class="sidebar">
-  <div>
-    <div class="sl">OpenAI API Key</div>
-    <div class="apirow"><i class="bi bi-key-fill"></i>
-      <input type="password" id="api-key" placeholder="sk-proj-..."/>
-    </div>
-  </div>
-  <hr class="dv"/>
   <div>
     <div class="sl">Patient Profile</div>
     <div class="mb-2">
@@ -357,11 +405,11 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
       <span class="graph-hdr-title">ReAct Agent Graph — Think → Act → Observe</span>
       <span class="graph-status" id="g-status">idle</span>
     </div>
-    <svg id="asvg" viewBox="0 0 860 130" height="118" style="width:100%;overflow:visible;display:block;">
+    <svg id="asvg" viewBox="0 0 860 130" height="190" style="width:100%;overflow:visible;display:block;">
       <defs>
         <marker id="a0" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L0,6L6,3z" fill="var(--b2)"/></marker>
         <marker id="a1" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L0,6L6,3z" fill="var(--green)"/></marker>
-        <marker id="a2" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L0,6L6,3z" fill="rgba(46,204,113,.4)"/></marker>
+        <marker id="a2" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0L0,6L6,3z" fill="rgba(var(--acc-rgb),.4)"/></marker>
       </defs>
 
       <!-- edges -->
@@ -548,6 +596,21 @@ hr.dv{border:none;border-top:1px solid var(--b1);}
 </div>
 <div id="toasts"></div>
 
+<div class="modal-bg" id="settings" onclick="if(event.target===this)closeSettings()">
+  <div class="modal-card">
+    <h3><i class="bi bi-gear-fill"></i> Settings</h3>
+    <p>Your key is stored only on this computer (~/.nutricoach/config.json).</p>
+    <div class="mrow"><span class="fl">OpenAI API Key</span>
+      <div class="apirow"><i class="bi bi-key-fill"></i><input type="password" id="api-key" placeholder="sk-proj-..." autocomplete="off"/></div>
+      <span class="fl" id="key-hint" style="margin-top:5px;text-transform:none;letter-spacing:0;font-weight:500;"></span></div>
+    <div class="mrow"><span class="fl">Model</span><select class="fi" id="model-sel"></select></div>
+    <div class="mbtns">
+      <button class="btn2" onclick="clearKey()">Remove key</button>
+      <button class="btn2" onclick="closeSettings()">Cancel</button>
+      <button class="btn2 primary" onclick="saveSettings()">Save</button>
+    </div>
+  </div>
+</div>
 <script>
 const S={gender:'Male',goal:'lose'};
 let completed=0;
@@ -805,8 +868,7 @@ function handleEvent(ev) {
 
 // ── Run ──────────────────────────────────────────────────────────────────
 function run() {
-  const key = document.getElementById('api-key').value.trim();
-  if (!key) { toast('OpenAI API key required.'); return; }
+  if (!SETTINGS.has_key) { toast('Add your OpenAI API key in Settings first.'); openSettings(); return; }
   const btn = document.getElementById('run-btn');
   btn.disabled = true; btn.innerHTML = '<div class="sp" style="border-top-color:#fff;"></div> Running…';
   reset();
@@ -814,7 +876,6 @@ function run() {
   fetch('/analyze', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({
-      api_key: key,
       age: parseInt(document.getElementById('age').value)||30,
       gender: S.gender,
       weight_kg: parseFloat(document.getElementById('weight').value)||82,
@@ -824,7 +885,8 @@ function run() {
       dietary_restrictions: document.getElementById('dietary').value,
       health_conditions: document.getElementById('conditions').value,
     })
-  }).then(res => {
+  }).then(async res => {
+    if (!res.ok) { const e = await res.json().catch(()=>({})); toast(e.error||('Error '+res.status)); resetBtn(); openSettings(); return; }
     const reader = res.body.getReader(), dec = new TextDecoder(); let buf = '';
     function read() {
       reader.read().then(({done,value}) => {
@@ -842,6 +904,27 @@ function run() {
     read();
   }).catch(e => { toast('Network error: ' + e.message); resetBtn(); });
 }
+
+// ── Settings & themes ─────────────────────────────────────────────────────
+let SETTINGS={has_key:false,models:[],model:'gpt-4o-mini'};
+function setTheme(t,save){document.documentElement.dataset.theme=t;document.getElementById('theme-sel').value=t;
+  if(save) postSettings({theme:t});}
+function paintKey(){document.getElementById('keynote').classList.toggle('ok',SETTINGS.has_key);
+  document.getElementById('keytxt').textContent=SETTINGS.has_key?('Key '+SETTINGS.key_hint+' · '+SETTINGS.model):'No API key';}
+function postSettings(body){return fetch('/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
+  .then(r=>r.json()).then(d=>{SETTINGS=d;paintKey();return d;});}
+function loadSettings(){fetch('/settings').then(r=>r.json()).then(d=>{SETTINGS=d;paintKey();setTheme(d.theme,false);});}
+function openSettings(){const m=document.getElementById('model-sel');
+  m.innerHTML=SETTINGS.models.map(x=>'<option'+(x===SETTINGS.model?' selected':'')+'>'+x+'</option>').join('');
+  document.getElementById('api-key').value='';
+  document.getElementById('key-hint').textContent=SETTINGS.has_key?('Saved key: '+SETTINGS.key_hint+' (leave blank to keep it)'):'No key saved yet.';
+  document.getElementById('settings').classList.add('show');setTimeout(()=>document.getElementById('api-key').focus(),50);}
+function closeSettings(){document.getElementById('settings').classList.remove('show');}
+function saveSettings(){const k=document.getElementById('api-key').value.trim(),b={model:document.getElementById('model-sel').value};
+  if(k) b.api_key=k; postSettings(b).then(closeSettings);}
+function clearKey(){postSettings({api_key:''}).then(closeSettings);}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')closeSettings();});
+loadSettings();
 </script>
 </body>
 </html>

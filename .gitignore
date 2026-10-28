@@ -1,0 +1,8 @@
+venv/
+venv_*/
+__pycache__/
+build/
+dist/
+*.spec
+NutriCoachAI.exe
+output/

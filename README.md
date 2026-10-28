@@ -1,4 +1,6 @@
-# NutriCoach ReAct
+# NutriCoach.AI
+
+<img src="static/icon.png" width="72" align="right"/>
 
 A multi-agent clinical nutrition system built with LangGraph where every agent implements the **ReAct (Reasoning + Acting)** pattern — each agent thinks step-by-step, calls tools, observes results, and iterates until it has a complete answer.
 
@@ -35,6 +37,51 @@ ANSWER  →  write final output
 ```
 
 This is implemented properly — not in name only. The model is bound to tools via `model.bind_tools()`, decides at inference time whether and when to call them, and processes tool results as `ToolMessage` observations fed back into the context window.
+
+---
+
+## How it flows
+
+### Agent graph with the Critic-Revise loop
+
+```mermaid
+flowchart LR
+    U([Patient profile]) --> BMI[BMI Agent<br/>calculate_bmi · classify_risk]
+    BMI --> NUT[Nutrition Agent<br/>compute_tdee · build_macro_targets]
+    NUT --> CRIT{Critic Agent<br/>score_plan}
+    CRIT -- "score < 7 · revise" --> NUT
+    CRIT -- "score ≥ 7" --> MEAL[Meal Agent<br/>build_meal_plan · get_supplement_stack]
+    MEAL --> COACH[Coach Agent<br/>safety_check · synthesise_report]
+    COACH --> R([7-day plan · safety audit · 90-day roadmap])
+```
+
+### Inside every agent: the ReAct loop
+
+```mermaid
+flowchart LR
+    T[THINK<br/>reason about the next step] --> A[ACT<br/>call a tool with arguments]
+    A --> O[OBSERVE<br/>read the tool result]
+    O -- "needs more" --> T
+    O -- "done" --> F([Final answer for this agent])
+```
+
+### Live streaming to the UI
+
+```mermaid
+sequenceDiagram
+    participant UI as Browser / desktop window
+    participant F as Flask (SSE)
+    participant G as Agents
+    UI->>F: POST /analyze (profile)
+    F-->>UI: preview (BMI, TDEE)
+    loop each agent
+        F-->>UI: agent_start
+        F->>G: run node (THINK → ACT → OBSERVE)
+        G-->>F: report + trace
+        F-->>UI: agent_done (trace, scores)
+    end
+    F-->>UI: complete
+```
 
 ---
 
@@ -148,9 +195,12 @@ def _run_react(model_with_tools, system_prompt, user_message, tools_by_name):
 ## Project Structure
 
 ```
-nutricoach_react/
+NutriCoach.AI/
 ├── agents.py              All 5 agents, 9 tools, ReAct loop, LangGraph graph
-├── app.py                 Flask server with SSE streaming
+├── app.py                 Flask server: SSE streaming + settings API
+├── desktop.py             Desktop launcher (app window)
+├── make_icon.py           Draws static/icon.png + icon.ico
+├── build_exe.cmd          PyInstaller build → NutriCoachAI.exe
 ├── visualize_graph.py     Graph visualizer (Pyvis HTML + Matplotlib PNG)
 ├── requirements.txt
 ├── screenshots/
@@ -158,7 +208,7 @@ nutricoach_react/
 │   ├── meal_plan_running.png
 │   └── coach_report.png
 └── templates/
-    └── index.html         Bootstrap 5 dark green frontend with ReAct trace panels
+    └── index.html         UI: 4 themes, settings, live ReAct trace panels
 ```
 
 ---
@@ -166,12 +216,28 @@ nutricoach_react/
 ## Setup
 
 ```bash
+python -m venv venv
+venv\Scriptsctivate            # macOS/Linux: source venv/bin/activate
 pip install -r requirements.txt
-python app.py
-# → http://localhost:5000
+python app.py                      # → http://localhost:5000
 ```
 
-Enter your OpenAI API key, fill in the patient profile, click **Run ReAct Agents**. Each agent tab shows the full ReAct trace — every THINK, ACT (tool call with args), and OBSERVE (tool result) step.
+Open **Settings** (gear icon, top right), paste your OpenAI API key and pick a model. The key is saved only on
+your machine in `~/.nutricoach/config.json`, never in the repo. Then fill in the profile and click **Run ReAct Agents**.
+
+### Themes
+
+Switch between **Original**, **Light**, **Dark** and **Neon** from the top bar; the choice is remembered.
+
+### Desktop app (.exe)
+
+```bash
+python desktop.py                  # run as a desktop window
+build_exe.cmd                      # build NutriCoachAI.exe with the app icon (Windows)
+```
+
+`desktop.py` serves the app on a free local port and opens it in a chromeless Edge/Chrome window; closing
+the window quits the app. `build_exe.cmd` packages it with PyInstaller into a single `NutriCoachAI.exe`.
 
 ## Graph Visualization
 
