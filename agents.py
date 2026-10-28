@@ -53,6 +53,10 @@ from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
+from langgraph.config import get_stream_writer
+
+import llm as L
+import planner as P
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -69,6 +73,24 @@ class NutritionState(TypedDict):
     goal: str
     dietary_restrictions: str
     health_conditions: str
+    target_weight_kg: float
+    target_weeks: int
+    region: str               # "in" (Indian, default) or "us"
+    diet_type: str            # veg | egg | nonveg
+    gym: bool
+    gym_days: int
+    budget: bool
+    waist_cm: float
+
+    # Rule-based plan from planner.build(): every number the agents narrate
+    plan: dict
+    plan_checks: list
+    plan_score: int
+    plan_revision_count: int
+    activity_plan: str
+    activity_trace: list
+    plan_critic_trace: list
+    plan_critique: str
 
     # Computed
     bmi: float
@@ -103,9 +125,18 @@ class NutritionState(TypedDict):
 # HELPERS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _make_model(api_key: str, model: str = "gpt-4o-mini") -> ChatOpenAI:
-    # Key is passed per client, not written to os.environ, so it never leaks between runs
-    return ChatOpenAI(model=model, temperature=0.3, api_key=api_key, max_retries=2, timeout=60)
+def _make_model(cfg: dict, tier: str = "small"):
+    """Chat model for the provider in settings; None means rule-based (no LLM)."""
+    return L.make_model(cfg, tier)
+
+def _bind(model, tools):
+    """Bind tools, or return the bare model if it can't call tools (weak/local models)."""
+    if model is None:
+        return None
+    try:
+        return model.bind_tools(tools)
+    except Exception:
+        return model
 
 def _bmi(weight_kg: float, height_cm: float) -> float:
     h = height_cm / 100
@@ -126,6 +157,10 @@ def _tdee(weight_kg, height_cm, age, gender, activity_level) -> int:
              "Moderately Active": 1.55, "Very Active": 1.725, "Extremely Active": 1.9}
     return int(bmr * mults.get(activity_level, 1.55))
 
+# Profile of the current run, read by tools whose args are only a few numbers
+# (simple args keep tool calling reliable on small local models)
+_CTX: dict = {}
+
 FMT = ("Write in plain text only. No markdown, no asterisks, no hashes. "
        "Section headings in ALL CAPS. All numbers must be specific to this patient.")
 
@@ -133,7 +168,8 @@ def _profile(s: NutritionState) -> str:
     return (f"Age {s['age']} | {s['gender']} | {s['weight_kg']}kg | {s['height_cm']}cm | "
             f"BMI {s['bmi']} ({s['bmi_category']}) | TDEE {s['tdee']} kcal | "
             f"Goal: {s['goal']} | Activity: {s['activity_level']} | "
-            f"Diet: {s['dietary_restrictions']} | Conditions: {s['health_conditions']}")
+            f"Diet: {s['dietary_restrictions']} | Conditions: {s['health_conditions']}"
+            + (f"\nCOMPUTED NUMBERS (use exactly): {P.summary(s['plan'])}" if s.get("plan") else ""))
 
 def _run_react(model_with_tools, system_prompt: str, user_message: str,
                tools_by_name: dict) -> tuple[str, list]:
@@ -143,6 +179,22 @@ def _run_react(model_with_tools, system_prompt: str, user_message: str,
     trace_steps is a list of dicts:
         {"type": "thought"|"action"|"observation", "content": str, "tool": str|None}
     """
+    if model_with_tools is None:
+        return "", [{"type": "thought", "content": "No AI model selected: writing this section from the rule engine.", "tool": None}]
+    try:
+        return _react_loop(model_with_tools, system_prompt, user_message, tools_by_name)
+    except Exception as e:
+        # Caller falls back to planner text, so a flaky or weak model never breaks the run
+        return "", [{"type": "thought", "content": f"Model error ({type(e).__name__}: {e}). Using the rule engine's text.", "tool": None}]
+
+def _text(response) -> str:
+    """Message text; Anthropic/Gemini may return a list of content blocks."""
+    c = response.content
+    if isinstance(c, list):
+        c = "".join(b.get("text", "") if isinstance(b, dict) else str(b) for b in c)
+    return (c or "").strip()
+
+def _react_loop(model_with_tools, system_prompt, user_message, tools_by_name):
     messages = [
         SystemMessage(content=system_prompt),
         HumanMessage(content=user_message),
@@ -156,7 +208,7 @@ def _run_react(model_with_tools, system_prompt: str, user_message: str,
 
         if response.tool_calls:
             # Extract thought from text content before tool call
-            thought_text = response.content.strip() if response.content else "Determining which tool to use..."
+            thought_text = _text(response) or "Determining which tool to use..."
             if thought_text:
                 trace.append({"type": "thought", "content": thought_text, "tool": None})
 
@@ -182,7 +234,7 @@ def _run_react(model_with_tools, system_prompt: str, user_message: str,
                 ))
         else:
             # No tool calls — final answer
-            final_text = response.content.strip()
+            final_text = _text(response)
             trace.append({"type": "thought", "content": "I have all the information needed. Composing final response.", "tool": None})
             return final_text, trace
 
@@ -240,7 +292,7 @@ BMI_TOOLS = [calculate_bmi, classify_risk]
 BMI_TOOLS_BY_NAME = {t.name: t for t in BMI_TOOLS}
 
 def bmi_agent_node(state: NutritionState, model: ChatOpenAI) -> dict:
-    model_with_tools = model.bind_tools(BMI_TOOLS)
+    model_with_tools = _bind(model, BMI_TOOLS)
 
     system = f"""You are a clinical physiologist using the ReAct (Reasoning + Acting) framework.
 You have access to tools: calculate_bmi, classify_risk.
@@ -267,11 +319,12 @@ CLINICAL STATUS, TARGET ANALYSIS, RISK PROFILE, CLINICAL PRIORITIES."""
 
     final_text, trace = _run_react(model_with_tools, system, user, BMI_TOOLS_BY_NAME)
 
-    # Extract computed values from tool observations
-    bmi = _bmi(state["weight_kg"], state["height_cm"])
-    cat = _bmi_category(bmi)
-    tdee = _tdee(state["weight_kg"], state["height_cm"],
-                 state["age"], state["gender"], state["activity_level"])
+    # The rule engine computes the whole plan once; later agents narrate and check it
+    plan = P.build(state)
+    final_text = final_text or P.bmi_text(plan)
+    bmi = plan["metrics"]["bmi"]
+    cat = plan["metrics"]["category"]
+    tdee = plan["metrics"]["tdee"]
 
     risk_result = classify_risk.invoke({
         "bmi": bmi, "age": state["age"],
@@ -281,6 +334,7 @@ CLINICAL STATUS, TARGET ANALYSIS, RISK PROFILE, CLINICAL PRIORITIES."""
     return {
         "bmi": bmi, "bmi_category": cat, "tdee": tdee,
         "risk_level": risk_result["protocol"],
+        "plan": plan,
         "bmi_report": final_text,
         "bmi_trace": trace,
         "nutrition_revision_count": 0,
@@ -297,51 +351,26 @@ CLINICAL STATUS, TARGET ANALYSIS, RISK PROFILE, CLINICAL PRIORITIES."""
 @tool
 def compute_tdee(weight_kg: float, height_cm: float, age: int,
                  gender: str, activity_level: str, goal: str) -> dict:
-    """Compute TDEE using Mifflin-St Jeor and apply goal-based calorie adjustment."""
-    tdee = _tdee(weight_kg, height_cm, age, gender, activity_level)
-    adjustments = {"lose": -500, "maintain": 0, "gain": 350}
-    adj = adjustments.get(goal.lower(), 0)
-    min_floor = 1200 if gender.lower() == "female" else 1500
-    target = max(min_floor, tdee + adj)
-    return {
-        "tdee_kcal": tdee,
-        "goal_adjustment_kcal": adj,
-        "daily_target_kcal": target,
-        "calorie_floor_applied": target == min_floor,
-        "deficit_or_surplus": abs(adj),
-    }
+    """Compute TDEE (Mifflin-St Jeor) and the Easy/Medium/High calorie paths with realistic deadlines."""
+    s = {**_CTX, "weight_kg": weight_kg, "height_cm": height_cm, "age": age,
+         "gender": gender, "activity_level": activity_level}
+    p = P.paths(s)
+    return {"tdee_kcal": P.tdee(s), "goal": p["goal"], "recommended": p["recommended"],
+            "paths": [{k: x[k] for k in ("name", "kcal", "kg_per_week", "weeks", "deadline", "steps")}
+                      for x in p["tiers"]],
+            "target_feasible": p["target_feasible"]}
 
 @tool
 def build_macro_targets(weight_kg: float, daily_kcal: int,
                         goal: str, risk_level: str) -> dict:
-    """Calculate protein, carbohydrate, and fat targets based on goal and risk level."""
-    if risk_level == "intervention":
-        protein_g_per_kg = 2.0
-    elif goal == "gain":
-        protein_g_per_kg = 1.8
-    else:
-        protein_g_per_kg = 1.6
-
-    protein_g = round(weight_kg * protein_g_per_kg)
-    protein_kcal = protein_g * 4
-    remaining = daily_kcal - protein_kcal
-    fat_g = round((remaining * 0.30) / 9)
-    carb_g = round((remaining * 0.70) / 4)
-
-    return {
-        "protein_g": protein_g,
-        "protein_g_per_kg": protein_g_per_kg,
-        "carbohydrate_g": carb_g,
-        "fat_g": fat_g,
-        "fibre_g_minimum": 25 if daily_kcal < 2000 else 30,
-        "water_litres": round(weight_kg * 0.033, 1),
-    }
+    """Protein (1.3 g/kg, natural foods only), carbohydrate, fat, fibre and water targets."""
+    return P.targets({**_CTX, "weight_kg": weight_kg}, daily_kcal)
 
 NUTRITION_TOOLS = [compute_tdee, build_macro_targets]
 NUTRITION_TOOLS_BY_NAME = {t.name: t for t in NUTRITION_TOOLS}
 
 def nutrition_agent_node(state: NutritionState, model: ChatOpenAI) -> dict:
-    model_with_tools = model.bind_tools(NUTRITION_TOOLS)
+    model_with_tools = _bind(model, NUTRITION_TOOLS)
     is_intervention = state["risk_level"] == "intervention"
 
     revision_context = ""
@@ -366,9 +395,14 @@ BMI assessment: {state['bmi_report'][:400]}
 
 Use your tools, then write a detailed nutrition plan with these ALL CAPS sections:
 CALORIE PRESCRIPTION, MACRONUTRIENT TARGETS, MICRONUTRIENT PRIORITIES (4 nutrients),
-HYDRATION, FOODS TO PRIORITISE (6 items), FOODS TO LIMIT (4 items), MEAL TIMING."""
+HYDRATION, FOODS TO PRIORITISE (6 items), FOODS TO LIMIT (4 items), MEAL TIMING.
+State the exact kcal and protein grams from COMPUTED NUMBERS. Protein comes only from natural
+{'Indian' if state.get('region', 'in') == 'in' else 'American'} foods (eggs, chicken, fish, paneer,
+tofu, dal, curd, milk, nuts). Never suggest whey, protein powder, protein bars or Greek yogurt."""
 
+    _CTX.update(state)
     final_text, trace = _run_react(model_with_tools, system, user, NUTRITION_TOOLS_BY_NAME)
+    final_text = final_text or P.nutrition_text(state["plan"])
 
     return {
         "nutrition_plan": final_text,
@@ -416,7 +450,7 @@ CRITIC_TOOLS = [score_plan]
 CRITIC_TOOLS_BY_NAME = {t.name: t for t in CRITIC_TOOLS}
 
 def critic_agent_node(state: NutritionState, model: ChatOpenAI) -> dict:
-    model_with_tools = model.bind_tools(CRITIC_TOOLS)
+    model_with_tools = _bind(model, CRITIC_TOOLS)
 
     system = f"""You are a senior clinical nutrition reviewer using the ReAct framework.
 You have one tool: score_plan.
@@ -459,6 +493,21 @@ DIMENSION SCORES, OVERALL VERDICT, ISSUES FOUND, REVISION INSTRUCTIONS (or NONE 
                 if m:
                     score = int(m.group(1))
 
+    # Code checks the text too, so a weak model can't pass a plan with wrong numbers or whey
+    t = state["plan"]["targets"]
+    plan_text = state["nutrition_plan"].replace(",", "")
+    issues = [f"mentions banned item: {b}" for b in P.banned_in(plan_text)]
+    if str(t["kcal"]) not in plan_text:
+        issues.append(f"must state the daily calorie target {t['kcal']} kcal")
+    if str(t["protein_g"]) not in plan_text:
+        issues.append(f"must state the protein target {t['protein_g']} g")
+    if issues:
+        score = min(score, 10 - 2 * len(issues))
+        final_text = (final_text or "") + "\nRULE CHECKS FAILED: " + "; ".join(issues)
+    elif not final_text:
+        final_text = f"RULE CHECKS PASSED: calories {t['kcal']} kcal and protein {t['protein_g']} g stated, no banned foods."
+        score = max(score, 8)
+
     count = state["nutrition_revision_count"] + 1
     return {
         "nutrition_critique": final_text,
@@ -488,32 +537,15 @@ def build_meal_plan(
     dietary_restrictions: str,
     goal: str,
 ) -> dict:
-    """Generate a 7-day meal plan framework with per-meal calorie distribution."""
-    meal_split = {"breakfast": 0.25, "lunch": 0.30, "dinner": 0.30, "snack": 0.15}
-    cuisines = ["Mediterranean", "Asian Fusion", "Middle Eastern", "Latin American",
-                "Indian", "Japanese", "West African"]
-    days = []
-    for i, cuisine in enumerate(cuisines, 1):
-        days.append({
-            "day": i,
-            "cuisine_theme": cuisine,
-            "meal_targets": {
-                meal: {
-                    "kcal": round(daily_kcal * pct),
-                    "protein_g": round(protein_g * pct),
-                    "carb_g": round(carb_g * pct),
-                    "fat_g": round(fat_g * pct),
-                }
-                for meal, pct in meal_split.items()
-            },
-            "daily_total_kcal": daily_kcal,
-        })
-    return {
-        "plan_framework": days,
-        "dietary_restrictions_applied": dietary_restrictions,
-        "goal": goal,
-        "note": "Use this framework to write specific meal names and ingredients.",
-    }
+    """Build a 7-day plan of real Indian/American meals scaled to the calorie target and
+    topped up with natural protein; no food repeats more than twice a week."""
+    t = P.targets(_CTX, daily_kcal)
+    week = P.meal_week(_CTX, {**t, "protein_g": protein_g}, goal)
+    return {"days": [{"day": d["day"], "kcal": d["kcal"], "protein_g": d["protein"],
+                      "meals": [f"{i['slot']}: {i['name']} (x{i['portion']})" for i in d["meals"]]}
+                     for d in week],
+            "pre_meal_fillers": P.PRE_MEAL if goal != "gain" else [],
+            "gain_extras": [g[0] for g in P.GAIN_EXTRAS] if goal == "gain" else []}
 
 @tool
 def get_supplement_stack(
@@ -524,86 +556,20 @@ def get_supplement_stack(
     health_conditions: str,
     dietary_restrictions: str,
 ) -> dict:
-    """Generate an evidence-based supplement stack for this patient profile."""
-    stack = []
-
-    # Core supplements everyone gets
-    stack.append({
-        "name": "Vitamin D3",
-        "dose": "2000 IU/day",
-        "timing": "With breakfast (fat-soluble)",
-        "evidence": "Strong",
-        "rationale": "Widespread deficiency; supports immunity and bone health"
-    })
-    stack.append({
-        "name": "Omega-3 Fish Oil",
-        "dose": "1000–2000 mg EPA+DHA/day",
-        "timing": "With a meal",
-        "evidence": "Strong",
-        "rationale": "Reduces inflammation; cardiovascular and cognitive support"
-    })
-
-    # Goal-specific
-    if goal == "lose":
-        stack.append({
-            "name": "Magnesium Glycinate",
-            "dose": "300–400 mg/day",
-            "timing": "Before bed",
-            "evidence": "Moderate",
-            "rationale": "Supports sleep quality and insulin sensitivity during caloric deficit"
-        })
-    elif goal == "gain":
-        stack.append({
-            "name": "Creatine Monohydrate",
-            "dose": "5 g/day",
-            "timing": "Post-workout or anytime",
-            "evidence": "Strong",
-            "rationale": "Most evidence-backed supplement for muscle strength and mass"
-        })
-
-    # Condition-specific
-    if "diabetes" in health_conditions.lower():
-        stack.append({
-            "name": "Berberine",
-            "dose": "500 mg with meals (2–3x/day)",
-            "timing": "With meals",
-            "evidence": "Moderate",
-            "rationale": "Clinically shown to improve insulin sensitivity"
-        })
-    if "hypertension" in health_conditions.lower():
-        stack.append({
-            "name": "CoQ10",
-            "dose": "100–200 mg/day",
-            "timing": "With a meal",
-            "evidence": "Moderate",
-            "rationale": "May modestly reduce blood pressure; antioxidant support"
-        })
-
-    # Vegan-specific
-    if "vegan" in dietary_restrictions.lower():
-        stack.append({
-            "name": "Vitamin B12",
-            "dose": "1000 mcg/day (methylcobalamin)",
-            "timing": "Morning",
-            "evidence": "Strong",
-            "rationale": "Critical — not available in plant foods"
-        })
-
-    return {"supplements": stack[:5], "total_supplements": min(len(stack), 5)}
+    """Supplements for bone health and gym recovery only (no protein powders)."""
+    return {"supplements": P.supplements(_CTX)}
 
 MEAL_TOOLS = [build_meal_plan, get_supplement_stack]
 MEAL_TOOLS_BY_NAME = {t.name: t for t in MEAL_TOOLS}
 
 def meal_agent_node(state: NutritionState, model: ChatOpenAI) -> dict:
-    model_with_tools = model.bind_tools(MEAL_TOOLS)
+    model_with_tools = _bind(model, MEAL_TOOLS)
 
-    # Extract calorie/macro from nutrition plan (use computed values as fallback)
-    daily_kcal = state["tdee"] + (-500 if state["goal"] == "lose" else 350 if state["goal"] == "gain" else 0)
-    min_floor = 1200 if state["gender"].lower() == "female" else 1500
-    daily_kcal = max(min_floor, daily_kcal)
-    protein_g = round(state["weight_kg"] * (2.0 if state["risk_level"] == "intervention" else 1.6))
-    carb_g = round((daily_kcal - protein_g * 4) * 0.70 / 4)
-    fat_g = round((daily_kcal - protein_g * 4) * 0.30 / 9)
+    t = state["plan"]["targets"]
+    daily_kcal, protein_g, carb_g, fat_g = t["kcal"], t["protein_g"], t["carbs_g"], t["fat_g"]
+    _CTX.update(state)
+    feedback = (f"\nPLAN CRITIC FEEDBACK TO FIX:\n{state['plan_critique']}"
+                if state.get("plan_revision_count") else "")
 
     system = f"""You are a culinary nutritionist and supplementation specialist using the ReAct framework.
 You have tools: build_meal_plan, get_supplement_stack.
@@ -634,10 +600,17 @@ DINNER: [dish] | Ingredients: [list] | Macros: P Xg / C Xg / F Xg / ~X kcal
 SNACK: [item] | Macros: P Xg / C Xg / F Xg / ~X kcal
 DAILY TOTAL: X kcal
 
+Use the tool's meals (modern breakfasts like egg or tofu scramble are welcome), keep each
+food to at most twice a week, and cover fibre, calcium, iron and B12 sources.
+{'Add EAT BEFORE MEALS: fillers from pre_meal_fillers to prevent overeating.' if state['plan']['paths']['goal'] != 'gain'
+ else 'Add HIGH-PROTEIN GAINERS from gain_extras (homemade shakes are fine, treats allowed twice a week).'}
+Never suggest whey, protein powder, protein bars or Greek yogurt.{feedback}
+
 SECTION 2: SUPPLEMENT PROTOCOL
 List each supplement from the tool result with dose, timing, and rationale."""
 
     final_text, trace = _run_react(model_with_tools, system, user, MEAL_TOOLS_BY_NAME)
+    final_text = final_text or (P.meal_text(state["plan"]) + "\nSECTION 2:\n" + P.supplement_text(state["plan"]))
 
     # Split sections
     meal_part = final_text
@@ -653,6 +626,76 @@ List each supplement from the tool result with dose, timing, and rationale."""
         "meal_trace": trace,
         "messages": [AIMessage(content="[Meal Agent] 7-day plan + supplements complete.")],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGENT 5 — ACTIVITY AGENT (walking for everyone, minimal-equipment gym if opted in)
+# Tools: walking_plan, gym_plan
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@tool
+def walking_plan(daily_steps: int) -> dict:
+    """Daily step target, walking minutes, a 6-week ramp-up and optional easy running."""
+    p = P.paths(_CTX)
+    return P.activity(_CTX, {**P.tier(p), "steps": daily_steps, "gym_days": 0})["walking"]
+
+@tool
+def gym_plan(days_per_week: int) -> dict:
+    """Push/pull/legs plan using only dumbbells, a bench, a pull-up bar and bodyweight."""
+    days = max(2, min(6, days_per_week))
+    return P.activity(_CTX, {**P.tier(P.paths(_CTX)), "gym_days": days})["gym"]
+
+ACTIVITY_TOOLS = [walking_plan, gym_plan]
+ACTIVITY_TOOLS_BY_NAME = {t.name: t for t in ACTIVITY_TOOLS}
+
+def activity_agent_node(state: NutritionState, model) -> dict:
+    tr = P.tier(state["plan"]["paths"])
+    _CTX.update(state)
+    tools = ACTIVITY_TOOLS if tr["gym_days"] else [walking_plan]
+    system = f"""You are a fitness coach for beginners using the ReAct framework.
+You have tools: {', '.join(t.name for t in tools)}.
+{FMT}
+Call walking_plan{' and gym_plan' if tr['gym_days'] else ''} first, then explain the plan simply."""
+    user = f"""Patient: {_profile(state)}
+Steps target {tr['steps']} a day{f", gym {tr['gym_days']} days a week" if tr['gym_days'] else ''}.
+Write: WALKING PLAN (steps, minutes, how to walk, weekly ramp){', RUNNING' if tr.get('run') else ''},
+{'GYM PLAN (each session with sets and reps, form cues, progression), ' if tr['gym_days'] else 'HOME BODYWEIGHT CIRCUIT, '}
+CORE AND ABS, SAFETY. Only dumbbells, a flat bench, a pull-up bar and bodyweight moves; no machines."""
+    final_text, trace = _run_react(_bind(model, tools), system, user, {t.name: t for t in tools})
+    return {"activity_plan": final_text or P.activity_text(state["plan"]),
+            "activity_trace": trace,
+            "messages": [AIMessage(content="[Activity Agent] Walking and training plan complete.")]}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AGENT 6 — PLAN CRITIC (rule checks in code, LLM explains; loops back to Meal once)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def plan_critic_node(state: NutritionState, model) -> dict:
+    checks = P.plan_checks(state, state["plan"], state["meal_plan"] + state["supplement_advice"])
+    score = P.score(checks)
+    lines = [f"{'PASS' if c['ok'] else 'FAIL'}  {c['check']}: {c['detail']}" for c in checks]
+    trace = [{"type": "action", "content": "Running rule checks on meals, protein, rate of change and activity",
+              "tool": "plan_checks"},
+             {"type": "observation", "content": "\n".join(lines), "tool": "plan_checks"}]
+    text = ""
+    if model is not None and score < 10:
+        try:
+            text = _text(model.invoke([SystemMessage(content=f"You are a strict nutrition plan reviewer. {FMT}"),
+                                       HumanMessage(content="Explain these failed checks and exactly how to fix each:\n"
+                                                            + "\n".join(l for l in lines if l.startswith("FAIL")))]))
+        except Exception:
+            pass
+    return {"plan_checks": checks, "plan_score": score,
+            "plan_critique": "\n".join(lines) + ("\n\n" + text if text else ""),
+            "plan_revision_count": state.get("plan_revision_count", 0) + 1,
+            "plan_critic_trace": trace,
+            "messages": [AIMessage(content=f"[Plan Critic] {score}/10 on {len(checks)} rule checks.")]}
+
+def should_revise_plan(state: NutritionState) -> Literal["meal_agent", "coach_agent"]:
+    if state["plan_score"] < 8 and state["plan_revision_count"] < 2:
+        return "meal_agent"
+    return "coach_agent"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -713,13 +756,13 @@ COACH_TOOLS = [safety_check, synthesise_report]
 COACH_TOOLS_BY_NAME = {t.name: t for t in COACH_TOOLS}
 
 def coach_agent_node(state: NutritionState, model: ChatOpenAI) -> dict:
-    model_with_tools = model.bind_tools(COACH_TOOLS)
+    model_with_tools = _bind(model, COACH_TOOLS)
 
-    # Estimate daily kcal for safety check
-    daily_kcal = state["tdee"] + (-500 if state["goal"] == "lose" else 350 if state["goal"] == "gain" else 0)
-    min_floor = 1200 if state["gender"].lower() == "female" else 1500
-    daily_kcal = max(min_floor, daily_kcal)
-    protein_g = round(state["weight_kg"] * (2.0 if state["risk_level"] == "intervention" else 1.6))
+    daily_kcal = state["plan"]["targets"]["kcal"]
+    protein_g = state["plan"]["targets"]["protein_g"]
+    paths = "\n".join(f"{x['name']}: {x['kcal']} kcal, {x['steps']} steps, gym {x['gym_days']}/wk -> "
+                      f"{x['kg_per_week']} kg/wk, {x['kg_per_month']} kg/month, {x['weeks']} weeks ({x['deadline']})"
+                      for x in state["plan"]["paths"]["tiers"])
 
     system = f"""You are a senior wellness coach and clinical safety officer using the ReAct framework.
 You have tools: safety_check, synthesise_report.
@@ -742,14 +785,19 @@ Then run synthesise_report with the process metadata.
 
 After observing both results, write the final coaching report:
 
-EXECUTIVE SUMMARY (3 sentences: current status, what this plan achieves, timeline)
-SAFETY AUDIT RESULT (what was checked and the outcome)
+EXECUTIVE SUMMARY (3 sentences: current status, what this plan achieves, realistic timeline)
+3 WAYS TO REACH YOUR GOAL (copy these numbers exactly, recommend {state['plan']['paths']['recommended']}):
+{paths}
+{'' if state['plan']['paths']['target_feasible'] else 'Say plainly that the requested deadline is unsafe and give the High path deadline instead.'}
+YOUR FINAL DAILY PLAN (food, water, walking or gym, sleep)
+SAFETY AUDIT RESULT (what was checked and the outcome; plan checks scored {state.get('plan_score', 10)}/10)
 YOUR THREE PRIORITIES THIS WEEK (specific and actionable)
-WHAT TO TRACK WEEKLY (4 metrics with how to measure each)
-YOUR 90-DAY MILESTONES (Week 2, Month 1, Month 3)
-COACHING NOTE (warm, professional closing — end with: Your specialist team has designed this plan with precision for you. The work starts now.)"""
+YOUR 90-DAY MILESTONES (Week 2, Month 1, Month 3, with expected weights)
+TIPS TO PREVENT RELAPSE (5 practical tips for Indian family meals, festivals and travel)
+COACHING NOTE (warm closing)"""
 
     final_text, trace = _run_react(model_with_tools, system, user, COACH_TOOLS_BY_NAME)
+    final_text = final_text or P.coach_text(state["plan"])
 
     return {
         "final_report": final_text,
@@ -762,16 +810,34 @@ COACHING NOTE (warm, professional closing — end with: Your specialist team has
 # GRAPH
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_graph(api_key: str):
-    model = _make_model(api_key)
+# node -> (UI name, description, function, model tier). Small models narrate, large ones judge.
+NODES = {
+    "bmi_agent":        ("BMI Agent", "Body metrics, Asian/WHO BMI cut-offs, risk", bmi_agent_node, "small"),
+    "nutrition_agent":  ("Nutrition Agent", "TDEE, 3 effort paths, 1.3 g/kg natural protein", nutrition_agent_node, "small"),
+    "nutrition_critic": ("Critic Agent", "Scores the prescription; rule checks on numbers and banned foods", critic_agent_node, "large"),
+    "meal_agent":       ("Meal Agent", "7-day meals, anti-overeating snacks, supplements", meal_agent_node, "small"),
+    "activity_agent":   ("Activity Agent", "Steps, walking/running and dumbbell gym plan", activity_agent_node, "small"),
+    "plan_critic":      ("Plan Critic", "Rule checks: calories, protein, food repeats, safe rate", plan_critic_node, "large"),
+    "coach_agent":      ("Coach Agent", "3 paths, realistic deadlines, final plan, relapse tips", coach_agent_node, "large"),
+}
+
+def _node(key, models):
+    name, desc, fn, tier = NODES[key]
+    def run(state):
+        try:   # tell the UI an agent started (only inside graph.stream)
+            get_stream_writer()({"event": "agent_start", "agent": name, "node": key, "description": desc})
+        except Exception:
+            pass
+        return fn(state, models[tier])
+    return run
+
+def build_graph(cfg: dict):
+    """cfg is the settings dict (provider, keys, model_small, model_large)."""
+    models = {"small": _make_model(cfg, "small"), "large": _make_model(cfg, "large")}
 
     g = StateGraph(NutritionState)
-
-    g.add_node("bmi_agent",       lambda s: bmi_agent_node(s, model))
-    g.add_node("nutrition_agent", lambda s: nutrition_agent_node(s, model))
-    g.add_node("nutrition_critic",lambda s: critic_agent_node(s, model))
-    g.add_node("meal_agent",      lambda s: meal_agent_node(s, model))
-    g.add_node("coach_agent",     lambda s: coach_agent_node(s, model))
+    for key in NODES:
+        g.add_node(key, _node(key, models))
 
     g.set_entry_point("bmi_agent")
     g.add_edge("bmi_agent",        "nutrition_agent")
@@ -784,7 +850,10 @@ def build_graph(api_key: str):
         {"nutrition_agent": "nutrition_agent", "meal_agent": "meal_agent"},
     )
 
-    g.add_edge("meal_agent",  "coach_agent")
+    g.add_edge("meal_agent",     "activity_agent")
+    g.add_edge("activity_agent", "plan_critic")
+    g.add_conditional_edges("plan_critic", should_revise_plan,
+                            {"meal_agent": "meal_agent", "coach_agent": "coach_agent"})
     g.add_edge("coach_agent", END)
 
     return g.compile()
@@ -797,6 +866,13 @@ def make_initial_state(**kw) -> NutritionState:
         activity_level=kw["activity_level"], goal=kw["goal"],
         dietary_restrictions=kw.get("dietary_restrictions", "none"),
         health_conditions=kw.get("health_conditions", "none"),
+        target_weight_kg=float(kw.get("target_weight_kg") or kw["weight_kg"]),
+        target_weeks=int(kw.get("target_weeks") or 0),
+        region=kw.get("region", "in"), diet_type=kw.get("diet_type", "nonveg"),
+        gym=bool(kw.get("gym")), gym_days=int(kw.get("gym_days") or 3),
+        budget=bool(kw.get("budget")), waist_cm=float(kw.get("waist_cm") or 0),
+        plan={}, plan_checks=[], plan_score=0, plan_revision_count=0,
+        activity_plan="", activity_trace=[], plan_critic_trace=[], plan_critique="",
         bmi=0.0, bmi_category="", risk_level="standard", tdee=0,
         nutrition_revision_count=0, nutrition_score=0,
         messages=[],
