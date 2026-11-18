@@ -20,6 +20,9 @@ streaks and a local body illustrator keep you going.
 - **Walking for everyone.** Gym users get a push/pull/legs plan using only **dumbbells, a
   bench and a pull-up bar**, plus bodyweight moves.
 
+**Docs:** [INFO.md](INFO.md) covers the system design and workflow, and
+[INTERVIEW.md](INTERVIEW.md) is interview prep for the project.
+
 ## Screenshots
 
 | Agents + 3 effort paths | Today: checklist, meals, workouts |
@@ -48,15 +51,23 @@ streaks and a local body illustrator keep you going.
 
 ## Agent graph
 
+```mermaid
+flowchart TD
+    start_node(["Start"]) --> bmi["BMI Agent"]
+    bmi --> nutrition["Nutrition Agent"]
+    nutrition --> critic["Critic Agent"]
+    critic -->|"score < 7 and revisions < 2"| nutrition
+    critic -->|"otherwise"| meal["Meal + Supplement Agent"]
+    meal --> activity["Activity Agent"]
+    activity --> plan_critic["Plan Critic"]
+    plan_critic -->|"score < 8 and revisions < 2"| meal
+    plan_critic -->|"otherwise"| coach["Coach Agent"]
+    coach --> done_node(["END"])
 ```
-BMI Agent ─► Nutrition Agent ─► Critic ──(score < 7, max 2)──► Nutrition Agent
-                                  │
-                                  ▼
-                 Meal + Supplement Agent ─► Activity Agent ─► Plan Critic ──(fails)──► Meal Agent
-                                                                   │
-                                                                   ▼
-                                                              Coach Agent ─► END
-```
+
+Each critic adds 1 to its revision counter on every pass (`should_revise` and
+`should_revise_plan` in `agents.py`), so each loop allows at most one revision before the
+graph moves on.
 
 | Agent | Tools | Model tier |
 |---|---|---|
@@ -72,6 +83,31 @@ BMI Agent ─► Nutrition Agent ─► Critic ──(score < 7, max 2)──►
 prompt carries the exact numbers. If a model can't call tools, the bare model still writes the
 text. If it fails or writes nothing, the planner's own text fills in. The critics then check the
 text against the numbers and the banned-food list.
+
+## System architecture
+
+```mermaid
+flowchart LR
+    ui["Browser UI<br/>index.html + app.js"]
+    api["Flask API<br/>app.py"]
+    sse["SSE stream<br/>graph.stream, custom + updates"]
+    lg["LangGraph StateGraph<br/>7 agent nodes in agents.py"]
+    planner["Rule engine<br/>planner.py"]
+    llm["LLM provider layer<br/>llm.py"]
+    providers["OpenAI, Anthropic, Gemini,<br/>DeepSeek, Ollama"]
+    db[("SQLite tracker<br/>~/.nutricoach/data.db")]
+    cfg[("Settings and keys<br/>~/.nutricoach/config.json")]
+
+    ui -->|"POST /analyze"| api
+    api --> sse
+    sse -->|"text/event-stream"| ui
+    sse <--> lg
+    lg -->|"tools and P.build"| planner
+    lg -->|"small and large tier models"| llm
+    llm --> providers
+    api <-->|"/profiles, /log"| db
+    api <-->|"/settings"| cfg
+```
 
 ## Compared with popular apps
 
